@@ -1,0 +1,183 @@
+---
+title: "Project Writeup"
+author: "Alex Tilcock"
+output: html_document:
+        pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+---
+# Background 
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+Six participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Accelerometers on the belt, forearm, arm, and barbell recorded the activity. Each activity was assigned a class where Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes
+
+More information about the data is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)
+
+# Assignment Goal 
+
+The goal of this assignment is use the captured data to create a machine learning model that is able to predict the class that should be assigned based on the values captured by the accelerometers. 
+
+The assignment provides two data files named pml-training.csv and pml-testing.csv.  I have elected to use the pml-training file to perform cross-validation, splitting the data into a training and test set.  The pml-testing.csv file will be used for final validation.
+
+# Explore and clean-up training data 
+
+Intial evaluation of the pml-training data reveals that there are a number of issues that need to be addressed before the data can be reliably used to create a model.  To keep the write up within the required 2000 word/5 figure limit I have commented out the lines that describe and evaluate the data but these can be executed by removing the comments marks if desired.  The code simply loads the data, removes the #DIV/0! entries and converts the non-numeric values to numeric; 
+
+
+```{r echo=TRUE,eval=TRUE}
+## load required libraries 
+if (!require("Hmisc")) install_packages("Hmisc")
+library(Hmisc)
+if (!require("caret")) install_packages("caret")
+library(caret)
+
+# load training dataset
+training<-read.csv("pml-training.csv")
+
+## review data characteristics - uncomment these two lines to see the result 
+##describe(training)
+##nearZeroVar(training,saveMetrics=TRUE)
+
+
+## clean up Divide by zero 
+training[training=="#DIV/0!"]<-NA
+
+ncols<-ncol(training)
+
+## ensure all numeric columns (from 8 to end of data set except the last column (Classe) are numeric 
+training[,c(8:(ncols-1))]<-sapply(training[,c(8:(ncols-1))],as.numeric)
+
+
+```
+
+# Select Features
+
+Now that the data has been cleaned up I want to do some reduction to limit the predictors to those that are relevant. This code addresses the following issues;
+
+1. Many vectors contain a high percentage of NA values.
+2. Some of the  vectors are not relevant (i.e. index column, timestamps)
+3. A large number of vectors have near zero variance 
+
+
+```{r echo=TRUE}
+## remove first seven columns as they are not relevant features for the prediction
+training<-training[,-c(1:7)]
+
+## identify any columns that have near zero variance   
+nsv <- nearZeroVar(training,saveMetrics=TRUE)
+
+## remove columns with no significant variance 
+nsvCols <- rownames(nsv[nsv$nzv==TRUE,])
+training<-training[,-which(names(training) %in% c(nsvCols))]
+
+## identify columns that have NA's present 
+
+nalist <- data.frame(colSums(is.na(training)))
+naCols <- rownames(subset(nalist,nalist>0))
+
+## remove NA columns to arrive at the final dataset for training the model
+trainingFinal<-training[,-which(names(training) %in% c(naCols))]
+
+
+```
+
+
+# Create datasets for cross validation 
+
+After running the clean up I now have a training data set consisting of 19622 observeration and 53 variables. I will partition this training set into two sets for training and testing of the model. 
+
+```{r echo=TRUE,eval=TRUE}
+
+inTrain<-createDataPartition(trainingFinal$classe,p=0.75,list=FALSE)
+trainPart <- trainingFinal[inTrain,]
+testPart <- trainingFinal[-inTrain,]
+
+```
+
+# Run two different models  
+
+Now I will use these two partitions to create and validate two separate models, one using random forest and a second using a CART decision tree.  ; 
+
+```{r echo=TRUE,eval=TRUE,cache=TRUE}
+set.seed(1999)
+modelRF <- train(classe ~ . ,data=trainPart, method="rf")
+predRF <- predict(modelRF,testPart)
+
+```
+
+
+```{r echo=TRUE,eval=TRUE,cache=TRUE}
+set.seed(1999)
+modelRpart <- train(classe ~ . ,data=trainPart, method="rpart")
+predRpart <- predict(modelRpart,testPart)
+
+```
+
+# Evaluate error rate and performance for two different models  
+
+Evaluating the in sample and out of sample accuracy for the random forest model
+
+
+```{r}
+
+modelRF$finalModel
+
+```
+                      
+                       Figure 1 - Random Forest Model
+
+```{r}
+
+confusionMatrix(predRF,testPart$classe)
+
+```
+
+                    Figure 2 - Random Forest Prediction
+
+
+```{r}
+modelRpart[4]
+
+```
+                    Figure 3 - Decision Tree Model 
+                   
+
+```{r}
+
+confusionMatrix(predRpart,testPart$classe)
+```
+              
+              Figure 4 - Decision Tree Model prediction
+
+# Summary
+
+Examining the expected error rate and 95% CI values for the Random Forest model vs Decision tree shows significant discrepencies.  The RF model error rate is less than 1% while the error rate for the Decision Tree model is close to 50%. This is also reflected in the outputs of the prediction using the same test data against each model. It is apparent that the random forest model provided a much higher level of accuracy against the training data set than the decision tree.  I will validate this using the pml-testing data.
+
+```{r}
+
+## create function to write out results to separate files 
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+# load testing dataset
+validation<-read.csv("pml-testing.csv")
+
+predValRF<-predict(modelRF,validation)
+
+predValRF
+pml_write_files(predValRF)
+
+```
+
+
+# Conclusion
+
+Submission of the output of the validation data set against the Random Forest model confirmed 20/20 correct predictions.  This would appear to confirm that the model is reliable. An assessment of the important variables to the model (using r varImp function) shows a significant reduction in importance in the first 20 variables.  Although not required for this assignment it is possible to use this inforemation to perform a further reduction in the number of predictors which would speed up the creation of the model. 
+                   
